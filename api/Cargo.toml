@@ -26,7 +26,7 @@ tar = "0.4"
 # Auth & Crypto
 jsonwebtoken = { version = "10", features = ["rust_crypto"] }
 argon2 = "0.5"
-rand = "0.9"
+rand = "0.10"
 aes-gcm = "0.10"
 sha2 = "0.10"
 hex = "0.4"
