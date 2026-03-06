@@ -1,0 +1,8 @@
+# Dev overrides — API, Web and Admin run locally, only infra in Docker
+services:
+  api:
+    profiles: ["prod"]
+  web:
+    profiles: ["prod"]
+  admin:
+    profiles: ["prod"]

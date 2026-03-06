@@ -1,0 +1,268 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: dbsaas-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER_FILE: /run/secrets/postgres_user
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_DB_FILE: /run/secrets/postgres_db
+    secrets:
+      - postgres_user
+      - postgres_password
+      - postgres_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$(cat /run/secrets/postgres_user) -d $$(cat /run/secrets/postgres_db)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+
+  redis:
+    image: redis:8-alpine
+    container_name: dbsaas-redis
+    restart: unless-stopped
+    command: >
+      sh -c 'redis-server
+      --requirepass "$$(cat /run/secrets/redis_password)"
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru'
+    secrets:
+      - redis_password
+    volumes:
+      - redis_data:/data
+    ports:
+      - "127.0.0.1:6380:6379"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a $$(cat /run/secrets/redis_password) ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.25'
+
+  unbound:
+    build:
+      context: ./dns
+      dockerfile: Dockerfile
+    container_name: dbsaas-unbound
+    restart: unless-stopped
+    environment:
+      PLATFORM_DOMAIN: ${PLATFORM_DOMAIN:-localhost}
+      PLATFORM_IP: ${PLATFORM_IP:-127.0.0.1}
+    networks:
+      - sb-proxy
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: '0.25'
+
+  traefik:
+    image: traefik:v3.6
+    container_name: dbsaas-traefik
+    restart: unless-stopped
+    command:
+      - "--providers.file.directory=/etc/traefik/dynamic"
+      - "--providers.file.watch=true"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.postgres.address=:5432"
+      - "--entrypoints.redis.address=:6379"
+      - "--entrypoints.mariadb.address=:3306"
+      - "--log.level=INFO"
+    ports:
+      - "8880:80"
+      - "8443:443"
+      - "5432:5432"
+      - "6379:6379"
+      - "3306:3306"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+    networks:
+      - backend
+      - frontend
+      - sb-proxy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.50'
+
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: dbsaas-api
+    restart: unless-stopped
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: 3001
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      REDIS_HOST: redis
+      PORT_RANGE_START: ${PORT_RANGE_START:-10000}
+      PORT_RANGE_END: ${PORT_RANGE_END:-60000}
+      MAX_DATABASES_PER_USER: ${MAX_DATABASES_PER_USER:-5}
+      REGISTRATION_ENABLED: ${REGISTRATION_ENABLED:-true}
+      TLS_CA_DIR: /app/tls/ca
+      TRAEFIK_DYNAMIC_DIR: /app/traefik/dynamic
+      BACKUP_DIR: /app/backups
+      PLATFORM_DOMAIN: ${PLATFORM_DOMAIN:-localhost}
+      PLATFORM_IP: ${PLATFORM_IP:-127.0.0.1}
+      RUST_LOG: dbsaas_api=debug,tower_http=debug
+    secrets:
+      - postgres_user
+      - postgres_password
+      - postgres_db
+      - redis_password
+      - jwt_secret
+      - encryption_key
+      - stripe_secret_key
+      - stripe_webhook_secret
+    ports:
+      - "127.0.0.1:3001:3001"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./tls:/app/tls
+      - ./traefik/dynamic:/app/traefik/dynamic
+      - ./backups:/app/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - backend
+      - frontend
+      - sb-proxy
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: dbsaas-web
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: http://api:3001
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+    networks:
+      - frontend
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.50'
+
+  admin:
+    build:
+      context: ./admin
+      dockerfile: Dockerfile
+    container_name: dbsaas-admin
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: http://api:3001
+    ports:
+      - "127.0.0.1:3003:3003"
+    depends_on:
+      - api
+    networks:
+      - frontend
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.50'
+
+secrets:
+  postgres_user:
+    file: ./secrets/postgres_user
+  postgres_password:
+    file: ./secrets/postgres_password
+  postgres_db:
+    file: ./secrets/postgres_db
+  redis_password:
+    file: ./secrets/redis_password
+  jwt_secret:
+    file: ./secrets/jwt_secret
+  encryption_key:
+    file: ./secrets/encryption_key
+  stripe_secret_key:
+    file: ./secrets/stripe_secret_key
+  stripe_webhook_secret:
+    file: ./secrets/stripe_webhook_secret
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  backend:
+    driver: bridge
+  frontend:
+    driver: bridge
+  sb-proxy:
+    driver: bridge
+    name: sb-proxy

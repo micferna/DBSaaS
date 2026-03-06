@@ -1,0 +1,64 @@
+[package]
+name = "dbsaas-api"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[dependencies]
+# Web framework
+axum = { version = "0.8", features = ["multipart", "macros"] }
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace", "compression-gzip"] }
+
+# Database
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "json", "derive", "migrate"] }
+
+# Docker
+bollard = { version = "0.20", features = ["ssl"] }
+bytes = "1"
+futures-util = "0.3"
+async-stream = "0.3"
+tokio-stream = "0.1"
+tar = "0.4"
+
+# Auth & Crypto
+jsonwebtoken = { version = "10", features = ["rust_crypto"] }
+argon2 = "0.5"
+rand = "0.9"
+aes-gcm = "0.10"
+sha2 = "0.10"
+hex = "0.4"
+
+# TLS
+rcgen = { version = "0.14", features = ["pem", "x509-parser"] }
+
+# Serialization & Validation
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+validator = { version = "0.20", features = ["derive"] }
+
+# Stripe (direct HTTP calls via reqwest instead of async-stripe to avoid transitive vuln deps)
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+hmac = "0.12"
+
+# Config & Utils
+dotenvy = "0.15"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+thiserror = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+governor = "0.10"
+toml = "1.0"
+base64 = "0.22"
+url = "2"
+tempfile = "3"
+prometheus = { version = "0.14", default-features = false }
+lazy_static = "1.5"
+lettre = { version = "0.11", default-features = false, features = ["tokio1-rustls-tls", "builder", "smtp-transport"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+
+[dev-dependencies]
+reqwest = { version = "0.12", features = ["json"] }

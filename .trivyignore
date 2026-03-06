@@ -1,0 +1,3 @@
+# Known false positives / development files
+# Private keys are only used for local dev TLS CA
+private-key

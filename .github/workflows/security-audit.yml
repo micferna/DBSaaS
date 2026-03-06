@@ -1,0 +1,162 @@
+name: Security Audit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * 1" # Every Monday 6am UTC
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  # ─── Rust: cargo audit (CVEs in dependencies) ───
+  rust-audit:
+    name: Rust — CVE Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: api
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+      - name: Run cargo audit
+        working-directory: api
+        run: cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2025-0134
+
+  # ─── Rust: clippy (linting, dead code, best practices) ───
+  rust-clippy:
+    name: Rust — Clippy Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: api
+      - name: Install clippy-sarif and sarif-fmt
+        run: cargo install clippy-sarif sarif-fmt
+      - name: Run clippy (SARIF)
+        working-directory: api
+        run: |
+          cargo clippy --all-targets --all-features --message-format=json \
+            -- -D warnings -A clippy::too_many_arguments \
+            | clippy-sarif | tee ../clippy-results.sarif | sarif-fmt
+        continue-on-error: true
+      - name: Upload Clippy SARIF
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: clippy-results.sarif
+          wait-for-processing: true
+
+  # ─── Rust: cargo deny (licenses + advisories) ───
+  rust-deny:
+    name: Rust — License & Advisory Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-deny
+        run: cargo install cargo-deny
+      - name: Run cargo deny
+        working-directory: api
+        run: cargo deny check advisories licenses
+
+  # ─── TypeScript: npm audit (CVEs in dependencies) ───
+  npm-audit:
+    name: Node — CVE Audit (${{ matrix.app }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        app: [web, admin]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ${{ matrix.app }}/package-lock.json
+      - name: Install dependencies
+        working-directory: ${{ matrix.app }}
+        run: npm ci
+      - name: npm audit
+        working-directory: ${{ matrix.app }}
+        run: npm audit --omit=dev --audit-level=high
+
+  # ─── TypeScript: ESLint (best practices, dead code, bugs) ───
+  eslint:
+    name: Node — ESLint (${{ matrix.app }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        app: [web, admin]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ${{ matrix.app }}/package-lock.json
+      - name: Install dependencies
+        working-directory: ${{ matrix.app }}
+        run: npm ci
+      - name: Run ESLint
+        working-directory: ${{ matrix.app }}
+        run: npx eslint .
+
+  # ─── TypeScript: Next.js build check ───
+  nextjs-build:
+    name: Node — Build Check (${{ matrix.app }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        app: [web, admin]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ${{ matrix.app }}/package-lock.json
+      - name: Install dependencies
+        working-directory: ${{ matrix.app }}
+        run: npm ci
+      - name: Build
+        working-directory: ${{ matrix.app }}
+        run: npx next build
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:3001
+
+  # ─── Trivy: full filesystem vulnerability scan ───
+  trivy:
+    name: Trivy — Filesystem Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run Trivy (SARIF)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+      - name: Upload Trivy SARIF
+        uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+          wait-for-processing: true
